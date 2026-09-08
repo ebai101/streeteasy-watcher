@@ -1,4 +1,5 @@
 node_modules/
+dist/
 repomix-output.txt
 state.json
 state.json.tmp
