@@ -8,14 +8,6 @@ import { readFile, writeFile, rename } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import path from "node:path";
 
-const STATE_FILE = process.env.STATE_FILE ?? path.resolve("state.json");
-const INITIAL_RUN_NOTIFIES = process.env.INITIAL_RUN_NOTIFIES === "true";
-const PUSHOVER_TOKEN = process.env.PUSHOVER_TOKEN;
-const PUSHOVER_USER = process.env.PUSHOVER_USER;
-const PUSHOVER_DEVICE = process.env.PUSHOVER_DEVICE;
-const SEARCH_CONFIG_FILE =
-  process.env.SEARCH_CONFIG_FILE ?? path.resolve("search.json");
-
 
 type WatcherState = {
   initializedAt: string;
@@ -27,34 +19,37 @@ type SearchFilters = NonNullable<SearchRentalsInput["filters"]>;
 type AreaCode = NonNullable<SearchFilters["areas"]>[number];
 type Amenity = NonNullable<SearchFilters["amenities"]>[number];
 
+const STATE_FILE = process.env.STATE_FILE ?? path.resolve("state.json");
+const INITIAL_RUN_NOTIFIES = process.env.INITIAL_RUN_NOTIFIES === "true";
+const PUSHOVER_TOKEN = process.env.PUSHOVER_TOKEN;
+const PUSHOVER_USER = process.env.PUSHOVER_USER;
+const PUSHOVER_DEVICE = process.env.PUSHOVER_DEVICE;
+const SEARCH_CONFIG_FILE =
+  process.env.SEARCH_CONFIG_FILE ?? path.resolve("search.json");
+
+const POLL_INTERVAL_MINUTES = Number(
+  process.env.POLL_INTERVAL_MINUTES ?? "10",
+);
+
+if (
+  !Number.isFinite(POLL_INTERVAL_MINUTES) ||
+  POLL_INTERVAL_MINUTES <= 0
+) {
+  throw new Error("POLL_INTERVAL_MINUTES must be a positive number");
+}
+
+const POLL_INTERVAL_MS = POLL_INTERVAL_MINUTES * 60_000;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function listingUrl(listing: SearchRentalListing): string {
   return `https://streeteasy.com${listing.urlPath}`;
 }
 
 function formatListing(listing: SearchRentalListing): string {
   return `<a href="${listingUrl(listing)}">${listing.street}${listing.unit ? ` ${listing.unit}` : ""}</a>`
-}
-
-async function loadSearchParams(): Promise<SearchRentalsInput> {
-  try {
-    const raw = await readFile(SEARCH_CONFIG_FILE, "utf8");
-    const parsed: unknown = JSON.parse(raw);
-
-    if (
-      typeof parsed !== "object" ||
-      parsed === null ||
-      Array.isArray(parsed)
-    ) {
-      throw new Error("Search configuration must be a JSON object");
-    }
-
-    return parsed as SearchRentalsInput;
-  } catch (error) {
-    throw new Error(
-      `Could not read search configuration at ${SEARCH_CONFIG_FILE}: ${error instanceof Error ? error.message : String(error)
-      }`,
-    );
-  }
 }
 
 function resolveArea(value: string): AreaCode {
@@ -98,6 +93,28 @@ function resolveEnumIds(searchParams: SearchRentalsInput): SearchRentalsInput {
       ),
     },
   };
+}
+
+async function loadSearchParams(): Promise<SearchRentalsInput> {
+  try {
+    const raw = await readFile(SEARCH_CONFIG_FILE, "utf8");
+    const parsed: unknown = JSON.parse(raw);
+
+    if (
+      typeof parsed !== "object" ||
+      parsed === null ||
+      Array.isArray(parsed)
+    ) {
+      throw new Error("Search configuration must be a JSON object");
+    }
+
+    return parsed as SearchRentalsInput;
+  } catch (error) {
+    throw new Error(
+      `Could not read search configuration at ${SEARCH_CONFIG_FILE}: ${error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
 }
 
 async function loadState(): Promise<WatcherState | null> {
@@ -241,11 +258,12 @@ async function main(): Promise<void> {
   if (newListings.length === 0) {
     console.log("No new listings.");
   } else {
-    console.log(`Found ${newListings.length} new listing(s). Sending notifications...`);
+    console.log(`Found ${newListings.length} new listing(s). Sending notifications:`);
 
     for (const listing of newListings) {
       const address = `${listing.street}${listing.unit ? ` ${listing.unit}` : ""}`;
       const url = listingUrl(listing);
+      console.log(address)
 
       await notify(
         [
@@ -266,23 +284,6 @@ async function main(): Promise<void> {
   // Keep the union, not just today's first page. This prevents alerting again
   // if a listing falls off page 1 and later reappears there.
   await saveState([...previousState.seenListingIds, ...currentIds]);
-}
-
-const POLL_INTERVAL_MINUTES = Number(
-  process.env.POLL_INTERVAL_MINUTES ?? "10",
-);
-
-if (
-  !Number.isFinite(POLL_INTERVAL_MINUTES) ||
-  POLL_INTERVAL_MINUTES <= 0
-) {
-  throw new Error("POLL_INTERVAL_MINUTES must be a positive number");
-}
-
-const POLL_INTERVAL_MS = POLL_INTERVAL_MINUTES * 60_000;
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 async function runForever(): Promise<void> {
