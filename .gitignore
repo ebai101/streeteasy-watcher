@@ -1,5 +1,6 @@
 node_modules/
-/repomix-output.txt
-/state.json
-/state.json.tmp
+repomix-output.txt
+state.json
+state.json.tmp
 .env
+search.json

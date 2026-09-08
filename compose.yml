@@ -1,0 +1,24 @@
+services:
+  streeteasy-watcher:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: streeteasy-watcher
+    env_file:
+      - .env
+    environment:
+      STATE_FILE: /data/state.json
+      SEARCH_CONFIG_FILE: /config/search.json
+      POLL_INTERVAL_MINUTES: "10"
+      TZ: America/New_York
+    volumes:
+      - ./search.json:/config/search.json:ro
+      - ./data:/data
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL

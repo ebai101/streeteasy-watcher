@@ -4,14 +4,15 @@
   "main": "watcher.ts",
   "license": "MIT",
   "dependencies": {
-    "streeteasy-api": "^0.4.0",
-    "tsx": "^4.23.13",
-    "typescript": "^7.0.2"
+    "streeteasy-api": "^0.4.0"
   },
   "scripts": {
-    "watcher": "tsx watcher.ts"
+    "watcher": "tsx watcher.ts",
+    "build": "tsc"
   },
   "devDependencies": {
-    "@types/node": "^26.5.0"
+    "@types/node": "^26.5.0",
+    "tsx": "^4.23.13",
+    "typescript": "^7.0.2"
   }
 }

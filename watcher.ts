@@ -8,11 +8,13 @@ import { readFile, writeFile, rename } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import path from "node:path";
 
-const STATE_FILE = path.resolve("state.json");
+const STATE_FILE = process.env.STATE_FILE ?? path.resolve("state.json");
 const INITIAL_RUN_NOTIFIES = process.env.INITIAL_RUN_NOTIFIES === "true";
 const PUSHOVER_TOKEN = process.env.PUSHOVER_TOKEN;
 const PUSHOVER_USER = process.env.PUSHOVER_USER;
 const PUSHOVER_DEVICE = process.env.PUSHOVER_DEVICE;
+const SEARCH_CONFIG_FILE =
+  process.env.SEARCH_CONFIG_FILE ?? path.resolve("search.json");
 
 
 type WatcherState = {
@@ -20,16 +22,82 @@ type WatcherState = {
   seenListingIds: string[];
 };
 
+type SearchRentalsInput = Parameters<StreetEasyClient["searchRentals"]>[0];
+type SearchFilters = NonNullable<SearchRentalsInput["filters"]>;
+type AreaCode = NonNullable<SearchFilters["areas"]>[number];
+type Amenity = NonNullable<SearchFilters["amenities"]>[number];
+
 function listingUrl(listing: SearchRentalListing): string {
   return `https://streeteasy.com${listing.urlPath}`;
 }
 
 function formatListing(listing: SearchRentalListing): string {
-  return [
-    `${listing.street}${listing.unit ? ` ${listing.unit}` : ""}`,
-    listingUrl(listing),
-    `StreetEasy ID: ${listing.id}`,
-  ].join("\n");
+  return `<a href="${listingUrl(listing)}">${listing.street}${listing.unit ? ` ${listing.unit}` : ""}</a>`
+}
+
+async function loadSearchParams(): Promise<SearchRentalsInput> {
+  try {
+    const raw = await readFile(SEARCH_CONFIG_FILE, "utf8");
+    const parsed: unknown = JSON.parse(raw);
+
+    if (
+      typeof parsed !== "object" ||
+      parsed === null ||
+      Array.isArray(parsed)
+    ) {
+      throw new Error("Search configuration must be a JSON object");
+    }
+
+    return parsed as SearchRentalsInput;
+  } catch (error) {
+    throw new Error(
+      `Could not read search configuration at ${SEARCH_CONFIG_FILE}: ${error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
+}
+
+function resolveArea(value: string): AreaCode {
+  const resolved = Areas[value as keyof typeof Areas];
+
+  if (!resolved) {
+    throw new Error(
+      `Unknown area "${value}". Use a key from the streeteasy-api Areas export.`,
+    );
+  }
+
+  return resolved as AreaCode;
+}
+
+function resolveAmenity(value: string): Amenity {
+  const resolved = Amenities[value as keyof typeof Amenities];
+
+  if (!resolved) {
+    throw new Error(
+      `Unknown amenity "${value}". Use a key from the streeteasy-api Amenities export.`,
+    );
+  }
+
+  return resolved as Amenity;
+}
+
+function resolveEnumIds(searchParams: SearchRentalsInput): SearchRentalsInput {
+  const filters = searchParams.filters;
+
+  if (!filters) {
+    return searchParams;
+  }
+
+  return {
+    ...searchParams,
+    filters: {
+      ...filters,
+      areas: filters.areas?.map((area) => resolveArea(String(area))),
+      amenities: filters.amenities?.map((amenity) =>
+        resolveAmenity(String(amenity)),
+      ),
+    },
+  };
 }
 
 async function loadState(): Promise<WatcherState | null> {
@@ -88,6 +156,7 @@ async function notify(
     title: options.title ?? "StreetEasy watcher",
     sound: "incoming",
     priority: "0",
+    html: "1",
   });
 
   if (PUSHOVER_DEVICE) {
@@ -121,29 +190,10 @@ async function notify(
 }
 
 async function getSearchResults(client: StreetEasyClient) {
-  const response = await client.searchRentals({
-    sorting: {
-      attribute: "LISTED_AT",
-      direction: "DESCENDING",
-    },
-    adStrategy: "NONE",
-    filters: {
-      areas: [Areas.RIDGEWOOD, Areas.BUSHWICK],
-      rentalStatus: "ACTIVE",
-      bedrooms: {
-        lowerBound: 3,
-        upperBound: null,
-      },
-      price: {
-        lowerBound: null,
-        upperBound: 4200,
-      },
-      amenities: [Amenities.DISHWASHER],
-    },
-    perPage: 50,
-    page: 1,
-    userSearchToken: "6acc6bf8-a96c-4883-9a20-d9712d7fa26f",
-  });
+  const configuredSearchParams = await loadSearchParams();
+  const searchParams = resolveEnumIds(configuredSearchParams);
+
+  const response = await client.searchRentals(searchParams);
 
   return {
     totalCount: response.searchRentals.totalCount,
@@ -174,7 +224,7 @@ async function main(): Promise<void> {
       await notify(
         `${message}\n\nCurrent matches:\n\n${listings
           .map(formatListing)
-          .join("\n\n")}`,
+          .join("\n")}`,
       );
     } else {
       console.log(message);
@@ -218,9 +268,48 @@ async function main(): Promise<void> {
   await saveState([...previousState.seenListingIds, ...currentIds]);
 }
 
-main().catch((error) => {
+const POLL_INTERVAL_MINUTES = Number(
+  process.env.POLL_INTERVAL_MINUTES ?? "10",
+);
+
+if (
+  !Number.isFinite(POLL_INTERVAL_MINUTES) ||
+  POLL_INTERVAL_MINUTES <= 0
+) {
+  throw new Error("POLL_INTERVAL_MINUTES must be a positive number");
+}
+
+const POLL_INTERVAL_MS = POLL_INTERVAL_MINUTES * 60_000;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function runForever(): Promise<void> {
+  console.log(
+    `StreetEasy watcher started; polling every ${POLL_INTERVAL_MINUTES} minute(s).`,
+  );
+
+  while (true) {
+    const startedAt = new Date().toISOString();
+
+    try {
+      console.log(`[${startedAt}] Running StreetEasy search.`);
+      await main();
+    } catch (error) {
+      console.error(
+        `[${startedAt}] Poll failed:`,
+        error instanceof Error ? error.stack ?? error.message : error,
+      );
+    }
+
+    await sleep(POLL_INTERVAL_MS);
+  }
+}
+
+runForever().catch((error) => {
   console.error(
-    "StreetEasy watcher failed:",
+    "StreetEasy watcher terminated:",
     error instanceof Error ? error.stack ?? error.message : error,
   );
   process.exitCode = 1;
