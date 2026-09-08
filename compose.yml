@@ -4,18 +4,18 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: streeteasy-watcher
+    user: "1000:1000"
     env_file:
       - .env
     environment:
       STATE_FILE: /data/state.json
       SEARCH_CONFIG_FILE: /config/search.json
-      POLL_INTERVAL_MINUTES: "10"
+      POLL_INTERVAL_MINUTES: 5
       TZ: America/New_York
     volumes:
       - ./search.json:/config/search.json:ro
       - ./data:/data
     restart: unless-stopped
-    read_only: true
     tmpfs:
       - /tmp
     security_opt:
