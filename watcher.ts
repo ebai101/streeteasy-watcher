@@ -287,9 +287,14 @@ async function main(): Promise<void> {
 }
 
 async function runForever(): Promise<void> {
-  console.log(
-    `StreetEasy watcher started; polling every ${POLL_INTERVAL_MINUTES} minute(s).`,
-  );
+  const message = `StreetEasy watcher started; polling every ${POLL_INTERVAL_MINUTES} minute(s).`
+  console.log(message);
+  if (INITIAL_RUN_NOTIFIES) {
+    await notify(message, {
+      title: "StreetEasy watcher",
+    },
+    )
+  }
 
   while (true) {
     const startedAt = new Date().toISOString();
