@@ -10,5 +10,8 @@
   },
   "scripts": {
     "watcher": "tsx watcher.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^26.5.0"
   }
 }
